@@ -1,0 +1,18 @@
+ g.items.forEach(item=>{
+      const b=document.createElement("button"); b.className="toc-btn"; b.textContent=item;
+      b.onclick=()=>ask(`${item} 내용을 알려줘`);
+      wrap.appendChild(b);
+    });
+    d.appendChild(wrap); el.appendChild(d);
+  });
+}
+
+document.getElementById("form").addEventListener("submit",e=>{e.preventDefault();ask(q.value)});
+document.getElementById("menuBtn").onclick=()=>sidebar.classList.toggle("open");
+document.getElementById("chunkCount").textContent=META.chunk_count;
+document.getElementById("revDate").textContent=META.revision_date;
+renderQuick(); renderToc();
+q.focus();
+</script>
+</body>
+</html>
