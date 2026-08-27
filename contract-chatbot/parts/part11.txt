@@ -1,0 +1,151 @@
+ nums = (question.match(/\d+(?:[.,]\d+)?(?:억|천|백|만|원|%|개월|회|인)?/g)||[]);
+  nums.forEach(num=>{
+    const nc=compact(num);
+    if(titleC.includes(nc)) score+=7;
+    if(textC.includes(nc)) score+=9;
+  });
+
+  // Domain proximity bonuses
+  const pairs=[
+    ["공사","공사"],["용역","용역"],["물품","물품"],["학교","학교"],
+    ["여성기업","여성기업"],["장애인기업","장애인기업"],["사회적기업","사회적기업"],
+    ["착공","착공"],["준공","준공"],["완료","완료"],["대가지급","대가 지급"]
+  ];
+  for(const [qv,cv] of pairs){
+    if(qc.includes(compact(qv)) && (titleC+textC).includes(compact(cv))) score+=8;
+  }
+  return score;
+}
+function rank(question){
+  return CHUNKS.map(c=>({...c,score:scoreChunk(question,c)}))
+    .sort((a,b)=>b.score-a.score || a.label.localeCompare(b.label))
+    .slice(0,6);
+}
+function lineScore(line, question){
+  const lc=compact(line);
+  let s=0;
+  const raw=tokenize(question);
+  for(const t of expandTerms(question)){
+    const tc=compact(t);
+    if(tc.length<2) continue;
+    if(lc.includes(tc)) s += raw.some(x=>compact(x)===tc)?5:2;
+  }
+  const nums=(question.match(/\d+(?:[.,]\d+)?(?:억|천|백|만|원|%|개월|회|인)?/g)||[]);
+  nums.forEach(n=>{ if(lc.includes(compact(n))) s+=6; });
+  if(/\d/.test(line)) s+=.8;
+  if(/하여야|할 수 있다|권장|제한|생략|징구|제출|이하|이상|초과|미만/.test(line)) s+=1.2;
+  return s;
+}
+function bestLines(result, question, limit=5){
+  const lines=result.text.split("\n").map(x=>x.trim()).filter(Boolean);
+  const scored=lines.map((line,i)=>({line,i,s:lineScore(line,question)}))
+    .sort((a,b)=>b.s-a.s || a.i-b.i);
+  let picks=scored.filter(x=>x.s>0).slice(0,limit);
+  if(!picks.length) picks=scored.slice(0,Math.min(3,scored.length));
+  // Add immediate contextual neighbors for very short table labels
+  const indices=new Set();
+  picks.forEach(p=>{
+    indices.add(p.i);
+    if(p.line.length<24 && p.i+1<lines.length) indices.add(p.i+1);
+  });
+  return [...indices].sort((a,b)=>a-b).slice(0,limit+2).map(i=>lines[i]);
+}
+function escapeHtml(s){
+  return (s||"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));
+}
+function highlight(s,question){
+  let out=escapeHtml(s);
+  const toks=[...new Set(tokenize(question).filter(x=>x.length>=2))].sort((a,b)=>b.length-a.length).slice(0,8);
+  for(const t of toks){
+    const safe=t.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+    try{ out=out.replace(new RegExp(`(${safe})`,"gi"),"<mark>$1</mark>"); }catch(e){}
+  }
+  return out;
+}
+function createAnswer(question, results){
+  const strong=results.filter(r=>r.score>=4);
+  if(!strong.length){
+    return {
+      summary:"첨부 지침에서 질문과 직접 연결되는 근거를 충분히 찾지 못했습니다. 계약 유형(공사·용역·물품), 금액, 찾는 단계(계약체결·착수·완료·대가지급) 등을 조금 더 구체적으로 적어주세요.",
+      sources:[]
+    };
+  }
+
+  const primary=strong[0];
+  const lines=bestLines(primary,question,6);
+  let intro=`질문과 가장 관련 있는 근거는 「${primary.label}」에서 확인됩니다.`;
+  const qc=compact(question);
+
+  if(qc.includes("얼마") || qc.includes("금액") || qc.match(/\d/)){
+    intro += "\n\n금액·수치가 포함된 관련 문구를 우선 추렸습니다:";
+  }else if(qc.includes("서류") || qc.includes("구비")){
+    intro += "\n\n문서에 기재된 관련 서류·요건은 다음과 같습니다:";
+  }else{
+    intro += "\n\n핵심 문구는 다음과 같습니다:";
+  }
+  const bullets=lines.map(x=>"• "+x).join("\n");
+  return {
+    summary:intro+"\n"+bullets,
+    sources:strong.slice(0,4)
+  };
+}
+
+const chatInner=document.getElementById("chatInner");
+const chat=document.getElementById("chat");
+const q=document.getElementById("q");
+const sidebar=document.getElementById("sidebar");
+
+function ask(question){
+  question=(question||"").trim();
+  if(!question) return;
+  addUser(question);
+  q.value="";
+  const results=rank(question);
+  const ans=createAnswer(question,results);
+  window.setTimeout(()=>addAssistant(ans,question),120);
+  sidebar.classList.remove("open");
+}
+function addUser(text){
+  const d=document.createElement("div");
+  d.className="msg user";
+  d.innerHTML=`<div class="bubble">${escapeHtml(text)}</div>`;
+  chatInner.appendChild(d);
+  scrollEnd();
+}
+function addAssistant(ans,question){
+  const d=document.createElement("div");
+  d.className="msg assistant";
+  const src=ans.sources.map((r,i)=>`
+    <details class="source" ${i===0?"open":""}>
+      <summary>근거 ${i+1} · ${escapeHtml(r.label)} <span style="color:#9aa5b5;font-weight:600">일치도 ${Math.round(r.score)}</span></summary>
+      <div class="excerpt">${highlight(r.text,question).replace(/\n/g,"<br>")}</div>
+    </details>`).join("");
+  d.innerHTML=`
+    <div class="bubble">
+      <div class="answer-head"><span class="bot-dot"></span><span>문서 기준 답변</span></div>
+      <div class="answer-summary">${escapeHtml(ans.summary)}</div>
+      ${src?`<div class="source-list">${src}</div>`:""}
+    </div>`;
+  chatInner.appendChild(d);
+  scrollEnd();
+}
+function scrollEnd(){
+  requestAnimationFrame(()=>chat.scrollTop=chat.scrollHeight);
+}
+function renderQuick(){
+  const el=document.getElementById("quickList");
+  QUICK.slice(0,6).forEach(x=>{
+    const b=document.createElement("button"); b.textContent=x; b.onclick=()=>ask(x); el.appendChild(b);
+  });
+  const chips=document.getElementById("welcomeChips");
+  QUICK.slice(0,5).forEach(x=>{
+    const b=document.createElement("button"); b.className="chip"; b.textContent=x; b.onclick=()=>ask(x); chips.appendChild(b);
+  });
+}
+function renderToc(){
+  const el=document.getElementById("toc");
+  TOC.forEach((g,gi)=>{
+    const d=document.createElement("details"); d.className="toc-group"; if(gi===0)d.open=true;
+    const s=document.createElement("summary"); s.textContent=g.title; d.appendChild(s);
+    const wrap=document.createElement("div"); wrap.className="toc-items";
+    
